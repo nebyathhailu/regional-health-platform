@@ -27,12 +27,18 @@ nginx -t
 # ARN + endpoint + non-secret service config.
 cd "${app_workdir}"
 
-export AWS_ENDPOINT_URL="${aws_endpoint_url}"
 export AWS_REGION="${aws_region}"
 export AWS_DEFAULT_REGION="${aws_region}"
-# LocalStack default credentials (account 000000000000) — not real secrets.
+%{ if aws_endpoint_url != "" ~}
+# LocalStack target only: point the SDK at the emulator and use its dummy creds
+# (account 000000000000 — not real secrets). Gated so the SAME image runs against
+# real AWS by passing aws_endpoint_url = "": no endpoint override and no static
+# creds, so the SDK falls through to the instance-profile role. This gate lives in
+# infra glue, not application code — the app itself has no isLocalStack branch.
+export AWS_ENDPOINT_URL="${aws_endpoint_url}"
 export AWS_ACCESS_KEY_ID="test"
 export AWS_SECRET_ACCESS_KEY="test"
+%{ endif ~}
 export DB_SECRET_ARN="${secret_arn}"
 export DB_HOST="${db_endpoint}"
 export DB_PORT="${db_port}"

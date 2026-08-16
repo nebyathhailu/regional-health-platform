@@ -44,31 +44,30 @@ locals {
 }
 
 # --- Security group -----------------------------------------------------------
-# Ingress is scoped (see local.ingress_cidrs). Flipping this to 0.0.0.0/0 is the
-# deliberate insecure change the `trivy config` gate must catch (C5 red PR).
+# Only port 80 (nginx) is exposed. The app port is deliberately NOT opened: nginx
+# reaches the app over loopback (127.0.0.1:app_port) inside the instance, which no
+# ingress rule governs. Opening app_port would grant an ungated path straight to
+# business traffic, bypassing the readiness gate and defeating C4.
+#
+# INGRESS scoping (see local.ingress_cidrs) is what the trivy red-PR targets:
+# flipping the port-80 ingress to 0.0.0.0/0 is the deliberate insecure change the
+# `trivy config` gate must catch. The open EGRESS below is intentional and
+# expected (SDK to Secrets Manager, DB, apt installs) — it is NOT the red-PR.
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-app-sg"
-  description = "nginx (80) + app port for the ${var.name_prefix} instance"
+  description = "nginx (80) for the ${var.name_prefix} instance; app port is loopback-only"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description = "nginx HTTP"
+    description = "nginx HTTP (the only external path; enforces the readiness gate)"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = local.ingress_cidrs
   }
 
-  ingress {
-    description = "app port (direct, for health probes)"
-    from_port   = var.app_port
-    to_port     = var.app_port
-    protocol    = "tcp"
-    cidr_blocks = local.ingress_cidrs
-  }
-
   egress {
-    description = "all egress (SDK to Secrets Manager, DB, package installs)"
+    description = "all egress (SDK to Secrets Manager, DB, package installs) - expected, not the red-PR"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -109,8 +108,10 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "app" {
-  name        = "${var.name_prefix}-tg"
-  port        = var.app_port
+  name = "${var.name_prefix}-tg"
+  # Target nginx (80), not the app port directly, so the declared LB path also
+  # goes through the readiness gate — consistent with the SG (no app-port ingress).
+  port        = 80
   protocol    = "HTTP"
   vpc_id      = data.aws_vpc.default.id
   target_type = "instance"

@@ -9,7 +9,7 @@ teammate reuses it and supplies their own image, port, and start command.
 
 | Resource | Purpose |
 |---|---|
-| `aws_security_group.app` | Ingress 80 + app port (scoped CIDR), egress all |
+| `aws_security_group.app` | Ingress **80 only** (scoped CIDR), egress all. App port is loopback-only (nginx→app), never externally exposed — see Readiness gating |
 | `aws_instance.app` | Boots the app AMI; `user_data` installs nginx + starts the app |
 | `aws_lb` / `aws_lb_target_group` / `aws_lb_listener` | ALB topology as IaC (graded + scanned; nginx carries real traffic) |
 
@@ -28,7 +28,7 @@ teammate reuses it and supplies their own image, port, and start command.
 | `secret_arn` | — | Secrets Manager ARN (from `modules/data`) — **value never passed** |
 | `db_endpoint` | — | DB host (host only), bridge-reachable e.g. `localhost.localstack.cloud` (break #1) |
 | `db_port` | `3306` | |
-| `aws_endpoint_url` | `http://localhost.localstack.cloud:4566` | SDK target; unset on real AWS |
+| `aws_endpoint_url` | `http://localhost.localstack.cloud:4566` | SDK target. Set to `""` for real AWS: user-data then exports no endpoint override and no static creds, so the SDK uses the instance-profile role (same image, either environment) |
 | `aws_region` | `us-east-1` | |
 | `ingress_cidrs` | default VPC CIDR | **Never `0.0.0.0/0`** — that's the trivy red-PR |
 
