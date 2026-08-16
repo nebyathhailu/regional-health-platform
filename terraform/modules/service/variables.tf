@@ -91,9 +91,10 @@ variable "secret_arn" {
 variable "db_endpoint" {
   description = <<-EOT
     DB host the app connects to (host only, not host:port — pair with db_port).
-    Matches the data module's `db_endpoint` output. On LocalStack, from inside
-    the instance container `localhost` is the instance itself (break #1) — pass a
-    bridge-reachable host such as `localhost.localstack.cloud`.
+    Matches the data module's `db_endpoint` output. This is the managed MySQL at
+    Aiven — a public host (e.g. mysql-xxxx.aivencloud.com) reached over TLS on a
+    non-standard db_port. Credentials still come from Secrets Manager (on
+    LocalStack via aws_endpoint_url); only the DB itself lives at Aiven.
   EOT
   type        = string
 }

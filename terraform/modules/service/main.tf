@@ -51,8 +51,14 @@ locals {
 #
 # INGRESS scoping (see local.ingress_cidrs) is what the trivy red-PR targets:
 # flipping the port-80 ingress to 0.0.0.0/0 is the deliberate insecure change the
-# `trivy config` gate must catch. The open EGRESS below is intentional and
-# expected (SDK to Secrets Manager, DB, apt installs) — it is NOT the red-PR.
+# `trivy config` gate must catch.
+#
+# EGRESS is scoped to the ports the instance genuinely needs to reach the public
+# internet: apt (80/443), DNS (53), and the managed MySQL at Aiven (a public host
+# on db_port). The CIDR must stay /0 because those destinations are public and
+# dynamic (apt mirrors, Aiven's rotating IPs), so AWS-0104 is suppressed with
+# justification rather than falsely narrowed. This is NOT the red-PR (that's ingress).
+#trivy:ignore:AVD-AWS-0104 public egress required (apt, DNS, Aiven MySQL); scoped to needed ports, dynamic public IPs
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-app-sg"
   description = "nginx (80) for the ${var.name_prefix} instance; app port is loopback-only"
@@ -67,10 +73,34 @@ resource "aws_security_group" "app" {
   }
 
   egress {
-    description = "all egress (SDK to Secrets Manager, DB, package installs) - expected, not the red-PR"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "HTTPS out (AWS SDK, apt-https, Aiven TLS control)"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "HTTP out (apt package mirrors)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "DNS"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "managed MySQL at Aiven (public host on db_port)"
+    from_port   = var.db_port
+    to_port     = var.db_port
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -85,9 +115,20 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.app.id]
   user_data              = local.user_data
 
+  # Require IMDSv2 session tokens (AWS-0028). FIDELITY: LocalStack's IMDS is
+  # limited (no iam/security-credentials/ path), so this can't be exercised at
+  # runtime here — but it's the correct posture for the real-AWS transfer.
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
+
   # Explicit size required on LocalStack, otherwise the launch fails.
+  # encrypted = true satisfies AWS-0131. FIDELITY: like RDS storage_encrypted,
+  # LocalStack echoes this back as configured but applies no real encryption.
   root_block_device {
     volume_size = var.root_volume_size
+    encrypted   = true
   }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-app" })
@@ -97,12 +138,16 @@ resource "aws_instance" "app" {
 # Graded + scanned as IaC even though nginx carries the real traffic: LocalStack
 # ELBv2 has no documented active health checking, so it cannot gate readiness.
 # lifecycle.ignore_changes pins LocalStack round-trip quirks (see FIDELITY.md).
+# internal = false is intentional: an ALB fronting a public service must be
+# internet-facing, so AWS-0053 is suppressed by design (not a defect).
+#trivy:ignore:AVD-AWS-0053 internet-facing is the intended design for a public entrypoint
 resource "aws_lb" "app" {
-  name               = "${var.name_prefix}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.app.id]
-  subnets            = slice(data.aws_subnets.default.ids, 0, min(2, length(data.aws_subnets.default.ids)))
+  name                       = "${var.name_prefix}-alb"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.app.id]
+  subnets                    = slice(data.aws_subnets.default.ids, 0, min(2, length(data.aws_subnets.default.ids)))
+  drop_invalid_header_fields = true # AWS-0052
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-alb" })
 }
@@ -126,6 +171,13 @@ resource "aws_lb_target_group" "app" {
   tags = merge(var.tags, { Name = "${var.name_prefix}-tg" })
 }
 
+# HTTP (not HTTPS) is accepted for this lab: the ALB is declared as IaC only and
+# does not route traffic on LocalStack (ELBv2 health checking is undocumented),
+# and there is no TLS material anywhere in the lab — nginx on the instance
+# terminates the only real traffic, over HTTP. Production would add an ACM cert,
+# an HTTPS (443) listener, and redirect this one to it. AWS-0054 suppressed with
+# that justification; noted in evidence/05-gates/README.md.
+#trivy:ignore:AVD-AWS-0054 ALB is non-routing IaC only; no TLS material in lab; nginx terminates real traffic
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.app.arn
   port              = 80
