@@ -1,0 +1,19 @@
+# Terraform / OpenTofu
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+tfplan
+tfplan.json
+*.tfplan
+crash.log
+crash.*.log
+
+# Never commit variable files that might carry secrets
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# Scratch
+PR_BODY.md
