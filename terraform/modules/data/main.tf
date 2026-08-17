@@ -1,0 +1,150 @@
+# =============================================================================
+# modules/data — RDS MySQL + Secrets Manager
+#
+# Generates the master password in-module (random_password) and writes it
+# straight into a Secrets Manager secret version — the value is never a
+# variable, so it can't land in a caller's tfvars, CLI history, or CI log. The
+# app resolves it from Secrets Manager at boot (see modules/service); this
+# module never hands the password to anything but the secret itself.
+#
+# FIDELITY (LocalStack): RDS returns the literal hostname "localhost" as its
+# endpoint. From inside another LocalStack-emulated container (e.g. the EC2
+# instance in modules/service) that resolves to the container itself, not to
+# LocalStack — the same bridge-networking break modules/service documents as
+# "break #1" for db_endpoint. This module rewrites the host to the
+# bridge-reachable alias before it ever leaves Terraform, so both the
+# `db_endpoint` output and the secret's `host` field are already correct —
+# callers don't have to know about the rewrite. See README.md for the rest of
+# the fidelity caveats (engine substitution, SG enforcement).
+# =============================================================================
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+locals {
+  # Scope ingress to the VPC CIDR unless the caller overrides. Never 0.0.0.0/0.
+  ingress_cidrs = var.ingress_cidrs != null ? var.ingress_cidrs : [data.aws_vpc.default.cidr_block]
+
+  # LocalStack hands back "localhost" for the RDS endpoint address, which only
+  # resolves to itself from inside another emulated container. Rewrite to the
+  # bridge alias so every consumer of this module's outputs gets a host that's
+  # actually reachable — real AWS never returns "localhost", so this is a no-op
+  # there.
+  raw_host = aws_db_instance.this.address
+  db_host  = local.raw_host == "localhost" ? "localhost.localstack.cloud" : local.raw_host
+}
+
+# --- Master password ---------------------------------------------------------
+# Generated here, never accepted as a variable. Excludes '/', '@', '"', and
+# space — all disallowed in an RDS MySQL master password.
+resource "random_password" "master" {
+  length           = 24
+  special          = true
+  override_special = "!#$%^&*()-_=+"
+  min_upper        = 2
+  min_lower        = 2
+  min_numeric      = 2
+  min_special      = 2
+}
+
+# --- Networking ----------------------------------------------------------------
+resource "aws_db_subnet_group" "this" {
+  name       = "${var.name_prefix}-db-subnets"
+  subnet_ids = data.aws_subnets.default.ids
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-db-subnets" })
+}
+
+# Ingress is scoped (see local.ingress_cidrs). Flipping this to 0.0.0.0/0 is the
+# same class of deliberate insecure change modules/service documents for
+# `trivy config` — don't use this SG as your own red-PR without checking with
+# whoever already claimed the ingress-scope break.
+resource "aws_security_group" "db" {
+  name        = "${var.name_prefix}-db-sg"
+  description = "MySQL (3306) for the ${var.name_prefix} RDS instance"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description = "MySQL from the app tier"
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = local.ingress_cidrs
+  }
+
+  egress {
+    description = "all egress"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-db-sg" })
+}
+
+# --- RDS instance --------------------------------------------------------------
+resource "aws_db_instance" "this" {
+  identifier     = "${var.name_prefix}-db"
+  engine         = "mysql"
+  engine_version = var.engine_version
+  instance_class = var.instance_class
+
+  allocated_storage = var.allocated_storage
+  storage_type      = "gp3"
+  # Declared for IaC hygiene / trivy config; LocalStack doesn't enforce actual
+  # encryption-at-rest the way real AWS does.
+  storage_encrypted = true
+
+  db_name  = var.db_name
+  username = var.db_username
+  password = random_password.master.result
+  port     = 3306
+
+  db_subnet_group_name   = aws_db_subnet_group.this.name
+  vpc_security_group_ids = [aws_security_group.db.id]
+  publicly_accessible    = false
+
+  multi_az                = false
+  backup_retention_period = 0
+
+  skip_final_snapshot = var.skip_final_snapshot
+  deletion_protection = var.deletion_protection
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-db" })
+}
+
+# --- Secrets Manager -------------------------------------------------------
+resource "aws_secretsmanager_secret" "db" {
+  name = var.secret_name
+  # 0 so a destroy/apply cycle against a persistent LocalStack container can
+  # reuse the same secret_name immediately, instead of hitting "already
+  # scheduled for deletion". Real AWS should generally keep the default
+  # recovery window; a production root should override this.
+  recovery_window_in_days = 0
+
+  tags = merge(var.tags, { Name = var.secret_name })
+}
+
+# Envelope keys are frozen by MODULE-CONTRACTS.md: engine, username, password,
+# host, port, dbname. modules/service (and any consumer) resolves this at boot
+# via GetSecretValue — the value never appears in user-data, an image, or git.
+resource "aws_secretsmanager_secret_version" "db" {
+  secret_id = aws_secretsmanager_secret.db.id
+  secret_string = jsonencode({
+    engine   = "mysql"
+    username = var.db_username
+    password = random_password.master.result
+    host     = local.db_host
+    port     = aws_db_instance.this.port
+    dbname   = var.db_name
+  })
+}
