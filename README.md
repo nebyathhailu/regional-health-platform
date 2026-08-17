@@ -12,8 +12,9 @@ and consumes these modules by git source.
 
 ```
 terraform/modules/
-  data/      RDS MySQL + Secrets Manager        (owner: Rigbe)
-  service/   EC2 + nginx + user-data + health   (owner: Nebyat)
+  network/   shared default-VPC/subnet lookup    (owner: Rigbe)
+  data/      RDS MySQL + Secrets Manager         (owner: Rigbe)
+  service/   EC2 + nginx + user-data + health    (owner: Nebyat)
 .github/workflows/
   golden-ci.yml   reusable gitleaks + trivy + zizmor pipeline (owner: Meron)
 docs/
@@ -52,7 +53,8 @@ reviewer on at least two others**. See [CONTRIBUTIONS.md](CONTRIBUTIONS.md).
 | Module | Owner | Status |
 |---|---|---|
 | `terraform/modules/service` | Nebyat | PR open |
-| `terraform/modules/data` | Rigbe | not started |
+| `terraform/modules/data` | Rigbe | PR open |
+| `terraform/modules/network` | Rigbe | PR open |
 | `.github/workflows/golden-ci.yml` | Meron | not started |
 
 ## Conventions

@@ -16,22 +16,21 @@
 # `db_endpoint` output and the secret's `host` field are already correct —
 # callers don't have to know about the rewrite. See README.md for the rest of
 # the fidelity caveats (engine substitution, SG enforcement).
+#
+# VPC/subnet facts come from modules/network, not a local data source — see
+# that module's README for why (dedupes the same lookup modules/service also
+# needs, and picks AZ-diverse subnets for the DB subnet group instead of
+# assuming order).
 # =============================================================================
 
-data "aws_vpc" "default" {
-  default = true
-}
-
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
+module "network" {
+  source   = "../network"
+  az_count = 2
 }
 
 locals {
   # Scope ingress to the VPC CIDR unless the caller overrides. Never 0.0.0.0/0.
-  ingress_cidrs = var.ingress_cidrs != null ? var.ingress_cidrs : [data.aws_vpc.default.cidr_block]
+  ingress_cidrs = var.ingress_cidrs != null ? var.ingress_cidrs : [module.network.vpc_cidr_block]
 
   # LocalStack hands back a loopback-shaped address for the RDS endpoint
   # ("localhost", possibly "127.0.0.1"), which only resolves to itself from
@@ -71,9 +70,12 @@ resource "random_password" "master" {
 }
 
 # --- Networking ----------------------------------------------------------------
+# AZ-diverse subnets, not "all default-VPC subnets" — RDS requires the subnet
+# group to span >= 2 distinct AZs, which module.network.az_diverse_subnet_ids
+# actually guarantees instead of assuming default-VPC subnet order.
 resource "aws_db_subnet_group" "this" {
   name       = "${var.name_prefix}-db-subnets"
-  subnet_ids = data.aws_subnets.default.ids
+  subnet_ids = module.network.az_diverse_subnet_ids
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-db-subnets" })
 }
@@ -85,7 +87,7 @@ resource "aws_db_subnet_group" "this" {
 resource "aws_security_group" "db" {
   name        = "${var.name_prefix}-db-sg"
   description = "MySQL (3306) for the ${var.name_prefix} RDS instance"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = module.network.vpc_id
 
   ingress {
     description = "MySQL from the app tier"

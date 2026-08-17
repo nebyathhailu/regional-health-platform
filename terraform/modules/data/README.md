@@ -12,10 +12,14 @@ sensibly.
 | Resource | Purpose |
 |---|---|
 | `random_password.master` | Generates the master password — never a variable, never leaves Terraform except into the secret below |
-| `aws_db_subnet_group.this` | Subnet group spanning the default VPC's subnets |
+| `aws_db_subnet_group.this` | Subnet group spanning AZ-diverse subnets (via `modules/network`, not just any N subnets) |
 | `aws_security_group.db` | Ingress 3306 (scoped CIDR), egress all |
 | `aws_db_instance.this` | RDS MySQL 8.0, gp3, `storage_encrypted = true` |
 | `aws_secretsmanager_secret` / `_version` | The credential envelope `modules/service` reads at boot |
+
+VPC/subnet facts (`vpc_id`, `vpc_cidr_block`, `az_diverse_subnet_ids`) come
+from [`modules/network`](../network/README.md), not a local data source —
+see that module's README for why it exists.
 
 ## Inputs
 
@@ -28,9 +32,10 @@ sensibly.
 | `allocated_storage` | `20` | RDS-MySQL gp3 minimum |
 | `engine_version` | `8.0` | Matches A1 |
 | `secret_name` | `regional-health/db` | Secrets Manager name |
-| `ingress_cidrs` | default VPC CIDR | **Never `0.0.0.0/0`** |
+| `ingress_cidrs` | default VPC CIDR | **Never `0.0.0.0/0`** — enforced by a `validation` block, not just documentation |
 | `skip_final_snapshot` | `true` | Lab default; override to `false` in a real production root |
 | `deletion_protection` | `false` | Lab default; override to `true` in a real production root |
+| `recovery_window_in_days` | `0` | Lab default (immediate secret purge on delete); override to `7`-`30` in a real production root |
 
 The first six are the frozen contract in [`docs/MODULE-CONTRACTS.md`](../../../docs/MODULE-CONTRACTS.md);
 the rest are additive and don't change it. **There is no password input** — see
@@ -59,15 +64,19 @@ or logged output.
 
 ## LocalStack fidelity caveats (for FIDELITY.md)
 
-- **RDS endpoint hostname is literally `"localhost"` on LocalStack.** From
-  inside another LocalStack-emulated container (e.g. the EC2 instance in
-  `modules/service`) that resolves to the container itself, not to LocalStack
-  — the same class of bridge-networking break `modules/service` calls "break
-  #1". This module rewrites the host to `localhost.localstack.cloud` before it
-  ever leaves Terraform (see `local.db_host` in `main.tf`), so `db_endpoint`
-  and the secret's `host` field are already correct — no caller-side
-  workaround needed. On real AWS, `aws_db_instance.address` is never literally
-  `"localhost"`, so the rewrite is a no-op there.
+- **RDS endpoint hostname is loopback-shaped (`"localhost"`, possibly
+  `"127.0.0.1"`) on LocalStack.** From inside another LocalStack-emulated
+  container (e.g. the EC2 instance in `modules/service`) that resolves to the
+  container itself, not to LocalStack — the same class of bridge-networking
+  break `modules/service` calls "break #1". This module rewrites the host to
+  `localhost.localstack.cloud` before it ever leaves Terraform (see
+  `local.db_host` in `main.tf`), so `db_endpoint` and the secret's `host`
+  field are already correct — no caller-side workaround needed. A `check`
+  block fails the plan loudly if the rewrite ever still produces a loopback
+  host (e.g. a future LocalStack version changes the endpoint format), rather
+  than silently handing every consumer an unreachable address. On real AWS,
+  `aws_db_instance.address` is never loopback-shaped, so the rewrite is a
+  no-op there.
 - **Engine substitution.** LocalStack's default RDS emulation can substitute
   MariaDB for a requested `mysql` engine unless the LocalStack container itself
   is started with `RDS_MYSQL_DOCKER=1`. That's a LocalStack startup/env
@@ -87,6 +96,7 @@ or logged output.
 - `tofu fmt` + `tofu validate` clean.
 - **Not yet runtime-verified** — needs a LocalStack apply with an auth token to
   confirm: the `localhost` → bridge-alias rewrite is actually reachable from an
-  instance built by `modules/service`, the subnet group accepts the default
-  VPC's subnets, and the secret envelope round-trips through a real
-  `GetSecretValue` call from the app. Tracking on first `make up`.
+  instance built by `modules/service`, `modules/network`'s AZ-diverse subnet
+  selection actually satisfies LocalStack's RDS subnet-group requirement, and
+  the secret envelope round-trips through a real `GetSecretValue` call from
+  the app. Tracking on first `make up`.

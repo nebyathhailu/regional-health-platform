@@ -3,6 +3,27 @@
 The interface each group module must honour so individual roots and the other
 modules compose cleanly. Owners may add inputs, but must not break these.
 
+## `terraform/modules/network` (owner: Rigbe)
+
+Shared default-VPC/subnet lookup — no resources, data sources only. Consumed
+by `modules/data`; `modules/service` should adopt it too (not yet done, to
+avoid rewriting that module's already-open PR out from under it).
+
+**Inputs**
+
+| Name | Default | Notes |
+|---|---|---|
+| `az_count` | `2` | Distinct AZs to select for `az_diverse_subnet_ids` |
+
+**Outputs**
+
+| Name | Meaning |
+|---|---|
+| `vpc_id` | Default VPC id |
+| `vpc_cidr_block` | Default VPC CIDR — the scoped-ingress fallback |
+| `subnet_ids` | All default-VPC subnet ids (not AZ-guaranteed) |
+| `az_diverse_subnet_ids` | Up to `az_count` subnet ids, one per distinct AZ |
+
 ## `terraform/modules/data` (owner: Rigbe)
 
 **Inputs**

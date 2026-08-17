@@ -32,6 +32,12 @@ variable "db_name" {
   description = "Application database name."
   type        = string
   default     = "capacity_lab"
+
+  validation {
+    # RDS MySQL DBName: starts with a letter, letters/numbers only, <=64 chars.
+    condition     = can(regex("^[a-zA-Z][a-zA-Z0-9]{0,63}$", var.db_name))
+    error_message = "db_name must start with a letter and be <=64 alphanumeric characters (RDS MySQL DBName constraints)."
+  }
 }
 
 variable "db_username" {
@@ -52,8 +58,13 @@ variable "instance_class" {
   default     = "db.t3.micro"
 
   validation {
-    condition     = can(regex("^db\\.", var.instance_class))
-    error_message = "instance_class must be a valid RDS class, e.g. db.t3.micro."
+    # Shape check, not an enumeration (AWS's class list changes too often to
+    # hardcode) — requires the real db.<family><generation>.<size> form, e.g.
+    # db.t3.micro, so a bare "db." typo/prefix like the old check allowed no
+    # longer passes. An unknown-but-well-shaped class still surfaces as an
+    # AWS apply-time error, same as before.
+    condition     = can(regex("^db\\.[a-z][a-z0-9]*\\.[a-z0-9]+$", var.instance_class))
+    error_message = "instance_class must look like a real RDS class, e.g. db.t3.micro (db.<family><generation>.<size>)."
   }
 }
 
@@ -74,8 +85,10 @@ variable "engine_version" {
   default     = "8.0"
 
   validation {
-    condition     = can(regex("^8\\.0", var.engine_version))
-    error_message = "engine_version must be on the 8.0 line to match A1's MySQL version."
+    # Anchored: "8.0" or "8.0.<n>" exactly, not merely prefixed — "8.0-bogus"
+    # or "8.0999" no longer pass.
+    condition     = can(regex("^8\\.0(\\.[0-9]+)?$", var.engine_version))
+    error_message = "engine_version must be exactly \"8.0\" or \"8.0.<n>\" to match A1's MySQL version."
   }
 }
 
