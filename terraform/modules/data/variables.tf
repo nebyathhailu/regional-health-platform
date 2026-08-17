@@ -95,6 +95,11 @@ variable "ingress_cidrs" {
   EOT
   type        = list(string)
   default     = null
+
+  validation {
+    condition     = var.ingress_cidrs == null ? true : !contains(var.ingress_cidrs, "0.0.0.0/0")
+    error_message = "ingress_cidrs must never include 0.0.0.0/0 — MySQL must not be open to the internet. Scope to the VPC CIDR or a narrower range."
+  }
 }
 
 variable "skip_final_snapshot" {
@@ -114,4 +119,21 @@ variable "deletion_protection" {
   EOT
   type        = bool
   default     = false
+}
+
+variable "recovery_window_in_days" {
+  description = <<-EOT
+    Secrets Manager recovery window (days) before a deleted secret is purged
+    for good. Defaults to 0 so a destroy/apply cycle against a persistent
+    LocalStack container can reuse the same secret_name immediately — a real
+    production root should override this to a non-zero value (AWS allows
+    7-30) for an actual recovery grace period.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.recovery_window_in_days == 0 || (var.recovery_window_in_days >= 7 && var.recovery_window_in_days <= 30)
+    error_message = "recovery_window_in_days must be 0 (immediate deletion — LocalStack/lab default) or between 7 and 30 (AWS's allowed range)."
+  }
 }

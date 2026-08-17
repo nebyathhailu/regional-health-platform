@@ -33,13 +33,28 @@ locals {
   # Scope ingress to the VPC CIDR unless the caller overrides. Never 0.0.0.0/0.
   ingress_cidrs = var.ingress_cidrs != null ? var.ingress_cidrs : [data.aws_vpc.default.cidr_block]
 
-  # LocalStack hands back "localhost" for the RDS endpoint address, which only
-  # resolves to itself from inside another emulated container. Rewrite to the
-  # bridge alias so every consumer of this module's outputs gets a host that's
-  # actually reachable — real AWS never returns "localhost", so this is a no-op
-  # there.
-  raw_host = aws_db_instance.this.address
-  db_host  = local.raw_host == "localhost" ? "localhost.localstack.cloud" : local.raw_host
+  # LocalStack hands back a loopback-shaped address for the RDS endpoint
+  # ("localhost", possibly "127.0.0.1"), which only resolves to itself from
+  # inside another emulated container. Rewrite to the bridge alias so every
+  # consumer of this module's outputs gets a host that's actually reachable —
+  # real AWS never returns a loopback address here, so this is a no-op there.
+  # Strip a possible :port suffix before comparing, in case a future
+  # LocalStack version includes one.
+  raw_host      = aws_db_instance.this.address
+  raw_host_only = split(":", local.raw_host)[0]
+  is_loopback   = contains(["localhost", "127.0.0.1", "0.0.0.0"], local.raw_host_only)
+  db_host       = local.is_loopback ? "localhost.localstack.cloud" : local.raw_host
+}
+
+# Fail loudly, at this module, if the rewrite above still produced a loopback
+# host — better than every consumer independently discovering "unreachable
+# DB" at boot. If this ever fires, LocalStack's RDS endpoint format changed
+# and the match above (raw_host_only) needs updating.
+check "db_host_not_loopback" {
+  assert {
+    condition     = !contains(["localhost", "127.0.0.1", "0.0.0.0"], local.db_host)
+    error_message = "db_host resolved to a loopback address after the LocalStack rewrite — modules/service would get an endpoint unreachable from another instance. LocalStack's RDS endpoint format may have changed; update the rewrite in main.tf."
+  }
 }
 
 # --- Master password ---------------------------------------------------------
@@ -124,12 +139,8 @@ resource "aws_db_instance" "this" {
 
 # --- Secrets Manager -------------------------------------------------------
 resource "aws_secretsmanager_secret" "db" {
-  name = var.secret_name
-  # 0 so a destroy/apply cycle against a persistent LocalStack container can
-  # reuse the same secret_name immediately, instead of hitting "already
-  # scheduled for deletion". Real AWS should generally keep the default
-  # recovery window; a production root should override this.
-  recovery_window_in_days = 0
+  name                    = var.secret_name
+  recovery_window_in_days = var.recovery_window_in_days
 
   tags = merge(var.tags, { Name = var.secret_name })
 }
