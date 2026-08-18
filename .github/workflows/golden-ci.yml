@@ -6,6 +6,11 @@ name: golden-ci
 # -> trivy image -> tag AMI -> tflocal apply. Each gate must fail the build on
 # a real finding — a scanner that only logs is theatre (see assignment C5).
 #
+# No registry: the image is built and scanned right here and used directly
+# (tagged localstack-ec2/<image_name>:ami-<sha12>) — ECR isn't on LocalStack's
+# free tier, so there's nothing to push to. Database is Aiven MySQL, not RDS
+# (also not on the free tier) — see the #announcements switch.
+#
 # Supply-chain hardening (C5 "guard the guards"):
 #   - every action pinned to a full commit SHA, never a moving tag
 #   - scan jobs run permissions: contents: read with no secrets in scope —
@@ -20,8 +25,12 @@ name: golden-ci
 #       with:
 #         app_dir: api
 #         image_name: regional-health-api
+#         run_apply: true            # only needed once you're ready to apply
+#         aiven_host: <your Aiven MySQL host>
+#         aiven_port: <your Aiven MySQL port>
 #       secrets:
 #         localstack_auth_token: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+#         aiven_password: ${{ secrets.AIVEN_PASSWORD }}
 # =============================================================================
 
 on:
@@ -32,7 +41,7 @@ on:
         type: string
         required: true
       image_name:
-        description: "Image name used for the ECR tag and the AMI tag"
+        description: "Image name used for the AMI tag (localstack-ec2/<image_name>:ami-<sha12>) — no registry/ECR, the image is built and scanned in-pipeline and used directly"
         type: string
         required: true
       terraform_dir:
@@ -43,9 +52,26 @@ on:
         description: "Whether to run tflocal apply (set false for PR-only gate runs; true on main)"
         type: boolean
         default: false
+      # Aiven MySQL replaced RDS (RDS isn't on LocalStack's free tier) — see
+      # the #announcements switch. host/port aren't secret-shaped (same as
+      # modules/data's own non-secret variables), so they're plain inputs;
+      # only the password is a secret. Names match modules/data's proposed
+      # variables (Rigbe) — provisional until that module's Aiven update
+      # actually merges; update here if the real variable names differ.
+      aiven_host:
+        description: "Aiven MySQL service hostname — only needed by the apply job"
+        type: string
+        required: false
+      aiven_port:
+        description: "Aiven MySQL service port — only needed by the apply job"
+        type: number
+        required: false
     secrets:
       localstack_auth_token:
         description: "LOCALSTACK_AUTH_TOKEN — only needed by the apply job, never by the scan jobs"
+        required: false
+      aiven_password:
+        description: "Aiven MySQL admin (avnadmin) password — only needed by the apply job"
         required: false
 
 permissions:
@@ -302,6 +328,9 @@ jobs:
           TF_CMD: tofu
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
+          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
+          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
         run: |
           set -euo pipefail
           tflocal init -input=false
@@ -311,11 +340,17 @@ jobs:
         working-directory: ${{ inputs.terraform_dir }}
         env:
           TF_CMD: tofu
+          TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
+          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
+          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
         run: |
           set -euo pipefail
           # -detailed-exitcode: 0 = no changes (what C1 requires), 1 = error,
           # 2 = changes present (fails this step on purpose — a non-empty
           # plan after apply means the module isn't actually reproducible).
+          # Needs the same TF_VARs as apply — tofu plan re-evaluates the
+          # whole config, not just diffs against the prior apply's inputs.
           tflocal plan -input=false -detailed-exitcode 2>&1 | tee "$GITHUB_WORKSPACE/evidence/01-iac/plan-after-apply.txt"
 
       - name: tflocal destroy (prove teardown, then evidence upload keeps the logs)
@@ -325,6 +360,9 @@ jobs:
           TF_CMD: tofu
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
+          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
+          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
         run: |
           set -euo pipefail
           tflocal destroy -auto-approve -input=false 2>&1 | tee "$GITHUB_WORKSPACE/evidence/01-iac/destroy.log"
