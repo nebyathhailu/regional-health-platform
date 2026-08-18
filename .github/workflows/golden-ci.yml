@@ -26,10 +26,10 @@ name: golden-ci
 #         app_dir: api
 #         image_name: regional-health-api
 #         run_apply: true            # only needed once you're ready to apply
-#         aiven_host: <your Aiven MySQL host>
-#         aiven_port: <your Aiven MySQL port>
 #       secrets:
 #         localstack_auth_token: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+#         aiven_host: ${{ secrets.AIVEN_HOST }}
+#         aiven_port: ${{ secrets.AIVEN_PORT }}
 #         aiven_password: ${{ secrets.AIVEN_PASSWORD }}
 # =============================================================================
 
@@ -52,23 +52,26 @@ on:
         description: "Whether to run tflocal apply (set false for PR-only gate runs; true on main)"
         type: boolean
         default: false
-      # Aiven MySQL replaced RDS (RDS isn't on LocalStack's free tier) — see
-      # the #announcements switch. host/port aren't secret-shaped (same as
-      # modules/data's own non-secret variables), so they're plain inputs;
-      # only the password is a secret. Names match modules/data's proposed
-      # variables (Rigbe) — provisional until that module's Aiven update
-      # actually merges; update here if the real variable names differ.
-      aiven_host:
-        description: "Aiven MySQL service hostname — only needed by the apply job"
-        type: string
-        required: false
-      aiven_port:
-        description: "Aiven MySQL service port — only needed by the apply job"
-        type: number
-        required: false
     secrets:
       localstack_auth_token:
         description: "LOCALSTACK_AUTH_TOKEN — only needed by the apply job, never by the scan jobs"
+        required: false
+      # Aiven MySQL replaced RDS (RDS isn't on LocalStack's free tier) — see
+      # the #announcements switch. host/port aren't secret-shaped data (same
+      # as modules/data's own non-secret variables) — they moved here from
+      # `inputs` anyway, because GitHub Actions' `vars` context proved
+      # unreliable when passed into a reusable workflow hosted in a
+      # different repo (confirmed empty across 6+ runs testing this against
+      # db-capacity-engineering-lab, despite AIVEN_HOST/AIVEN_PORT being
+      # correctly set as repo Variables there — a known inconsistency, see
+      # https://github.com/orgs/community/discussions/26671). `secrets`
+      # propagate reliably every time; using that for all three Aiven values
+      # trades "correct modeling" for "actually works."
+      aiven_host:
+        description: "Aiven MySQL service hostname — only needed by the apply job"
+        required: false
+      aiven_port:
+        description: "Aiven MySQL service port — only needed by the apply job"
         required: false
       aiven_password:
         description: "Aiven MySQL admin (avnadmin) password — only needed by the apply job"
@@ -328,8 +331,8 @@ jobs:
           TF_CMD: tofu
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
-          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
-          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_host: "${{ secrets.aiven_host }}"
+          TF_VAR_aiven_port: "${{ secrets.aiven_port }}"
           TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
         run: |
           set -euo pipefail
@@ -341,8 +344,8 @@ jobs:
         env:
           TF_CMD: tofu
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
-          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
-          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_host: "${{ secrets.aiven_host }}"
+          TF_VAR_aiven_port: "${{ secrets.aiven_port }}"
           TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
         run: |
           set -euo pipefail
@@ -360,8 +363,8 @@ jobs:
           TF_CMD: tofu
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
-          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
-          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_host: "${{ secrets.aiven_host }}"
+          TF_VAR_aiven_port: "${{ secrets.aiven_port }}"
           TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
         run: |
           set -euo pipefail
