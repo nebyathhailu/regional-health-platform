@@ -52,8 +52,9 @@ reviewer on at least two others**. See [CONTRIBUTIONS.md](CONTRIBUTIONS.md).
 
 | Module | Owner | Status |
 |---|---|---|
-| `terraform/modules/service` | Nebyat | PR open |
-| `terraform/modules/data` | Rigbe | PR open |
+| `terraform/modules/service` | Nebyat | Merged |
+| `terraform/modules/data` | Rigbe | Merged |
+| `terraform/modules/network` | Rigbe | Merged |
 | `.github/workflows/golden-ci.yml` | Meron | PR open |
 
 ## Conventions
