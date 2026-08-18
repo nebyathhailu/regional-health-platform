@@ -5,9 +5,13 @@ modules compose cleanly. Owners may add inputs, but must not break these.
 
 ## `terraform/modules/network` (owner: Rigbe)
 
-Shared default-VPC/subnet lookup — no resources, data sources only. Consumed
-by `modules/data`; `modules/service` should adopt it too (not yet done, to
-avoid rewriting that module's already-open PR out from under it).
+Shared default-VPC/subnet lookup — no resources, data sources only. Originally
+consumed by `modules/data` for its RDS subnet group; that dependency is gone
+now that the database moved to Aiven (2026-08-18, see `modules/data`'s
+contract below) — `modules/data` no longer needs a VPC at all. `modules/service`
+still needs VPC/subnet facts for its EC2 instance and ALB and should adopt
+this module (not yet done, to avoid rewriting that module's already-open PR
+out from under it).
 
 **Inputs**
 
@@ -26,16 +30,23 @@ avoid rewriting that module's already-open PR out from under it).
 
 ## `terraform/modules/data` (owner: Rigbe)
 
+> **2026-08-18:** switched from RDS (not on LocalStack's free Hobby tier) to
+> Aiven for MySQL — a real external managed MySQL, provisioned by hand, not
+> by this module. **Outputs are unchanged.** Inputs below reflect the current
+> (Aiven) shape; the RDS-only inputs this table used to list
+> (`db_username`, `instance_class`, `allocated_storage`, `engine_version`)
+> are gone along with the RDS resources that used them.
+
 **Inputs**
 
 | Name | Default | Notes |
 |---|---|---|
-| `db_name` | `capacity_lab` | application database |
-| `db_username` | `app` | master/app user |
-| `instance_class` | `db.t3.micro` | 10k patients is tiny |
-| `allocated_storage` | `20` | RDS-MySQL minimum, gp3 |
-| `engine_version` | `8.0` | matches A1 |
+| `db_name` | `capacity_lab` | database name on the Aiven service |
 | `secret_name` | `regional-health/db` | Secrets Manager name |
+| `aiven_host` | — | no default, caller-supplied |
+| `aiven_port` | — | no default, caller-supplied |
+| `aiven_username` | `avnadmin` | Aiven's free-tier admin username |
+| `aiven_password` | — | no default, `sensitive = true`, sourced via `TF_VAR_aiven_password` |
 
 **Outputs** (consumed by `service` + individual roots)
 

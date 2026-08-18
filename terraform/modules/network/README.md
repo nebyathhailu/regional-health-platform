@@ -50,12 +50,16 @@ AWS error.
 
 ## Consumers
 
-- `modules/data` — `vpc_id` (security group), `vpc_cidr_block` (`ingress_cidrs`
-  default), `az_diverse_subnet_ids` (DB subnet group).
+- `modules/data` — **no longer a consumer.** It used `vpc_id`/`vpc_cidr_block`/
+  `az_diverse_subnet_ids` for its RDS subnet group and security group; both
+  are gone now that the database moved to Aiven (2026-08-18), an external
+  service outside the VPC entirely. See `modules/data`'s README/`main.tf` for
+  the full context.
 - `modules/service` — not yet wired up (this module landed after
-  `modules/service`'s PR was already open). Adopting it there is a follow-up
-  to coordinate with whoever owns that module, so its still-open PR isn't
-  rewritten out from under it.
+  `modules/service`'s PR was already open). Still the intended primary
+  consumer — its EC2 instance and ALB both need VPC/subnet facts. Adopting it
+  there is a follow-up to coordinate with whoever owns that module, so its
+  still-open PR isn't rewritten out from under it.
 
 ## Testing
 
