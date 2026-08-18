@@ -32,9 +32,16 @@ variable "db_name" {
   default     = "capacity_lab"
 
   validation {
-    # MySQL database name: starts with a letter, letters/numbers only, <=64 chars.
-    condition     = can(regex("^[a-zA-Z][a-zA-Z0-9]{0,63}$", var.db_name))
-    error_message = "db_name must start with a letter and be <=64 alphanumeric characters (MySQL database name constraints)."
+    # Standard MySQL identifier rules: letters, digits, underscore; starts
+    # with a letter or underscore; <=64 chars. (Not RDS's stricter historical
+    # DBName-parameter constraint — that applied to RDS creating the database
+    # itself; here we're just recording the name of a database that already
+    # exists on Aiven, created through Aiven's own tooling, so plain MySQL
+    # identifier rules are the right check. The default "capacity_lab" itself
+    # has an underscore, which is exactly why the old alphanumeric-only regex
+    # was wrong.)
+    condition     = can(regex("^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", var.db_name))
+    error_message = "db_name must start with a letter or underscore and be <=64 letters/digits/underscores (MySQL identifier rules)."
   }
 }
 
