@@ -265,11 +265,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install OpenTofu
+        # tflocal defaults to invoking `terraform` unless TF_CMD is set —
+        # checked LocalStack's own docs directly. The group platform's
+        # convention is tofu (README.md: "OpenTofu (tofu), Terraform >=
+        # 1.10"), so TF_CMD=tofu is set on every subsequent tflocal step
+        # below, and this installs the tofu binary itself (not Terraform).
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh -o install-opentofu.sh
+          chmod +x install-opentofu.sh
+          sudo ./install-opentofu.sh --install-method deb
+          rm -f install-opentofu.sh
+
       - name: Start LocalStack (in-runner mode)
         env:
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
         run: |
-          pip install localstack awscli-local[ver1]
+          pip install localstack terraform-local awscli-local[ver1]
           docker pull localstack/localstack-pro:latest
           DISABLE_EVENTS=1 localstack start -d
           localstack wait -t 60
@@ -280,16 +293,18 @@ jobs:
       - name: tflocal apply
         working-directory: ${{ inputs.terraform_dir }}
         env:
+          TF_CMD: tofu
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
         run: |
           set -euo pipefail
-          pip install terraform-local
           tflocal init -input=false
           tflocal apply -auto-approve -input=false 2>&1 | tee "$GITHUB_WORKSPACE/evidence/01-iac/apply.log"
 
       - name: Verify plan is empty after apply (C1 — must be empty)
         working-directory: ${{ inputs.terraform_dir }}
+        env:
+          TF_CMD: tofu
         run: |
           set -euo pipefail
           # -detailed-exitcode: 0 = no changes (what C1 requires), 1 = error,
@@ -301,6 +316,7 @@ jobs:
         if: always()
         working-directory: ${{ inputs.terraform_dir }}
         env:
+          TF_CMD: tofu
           LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
           TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
         run: |
