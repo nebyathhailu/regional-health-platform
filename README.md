@@ -13,7 +13,7 @@ and consumes these modules by git source.
 ```
 terraform/modules/
   network/   shared default-VPC/subnet lookup    (owner: Rigbe)
-  data/      RDS MySQL + Secrets Manager         (owner: Rigbe)
+  data/      Aiven MySQL + Secrets Manager        (owner: Rigbe)
   service/   EC2 + nginx + user-data + health    (owner: Nebyat)
 .github/workflows/
   golden-ci.yml   reusable gitleaks + trivy + zizmor pipeline (owner: Meron)
