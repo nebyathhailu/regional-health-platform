@@ -1,0 +1,376 @@
+name: golden-ci
+
+# =============================================================================
+# Reusable pipeline for every individual rehost repo. Gate order is frozen by
+# docs/MODULE-CONTRACTS.md: gitleaks -> trivy config -> zizmor -> docker build
+# -> trivy image -> tag AMI -> tflocal apply. Each gate must fail the build on
+# a real finding — a scanner that only logs is theatre (see assignment C5).
+#
+# No registry: the image is built and scanned right here and used directly
+# (tagged localstack-ec2/<image_name>:ami-<sha12>) — ECR isn't on LocalStack's
+# free tier, so there's nothing to push to. Database is Aiven MySQL, not RDS
+# (also not on the free tier) — see the #announcements switch.
+#
+# Supply-chain hardening (C5 "guard the guards"):
+#   - every action pinned to a full commit SHA, never a moving tag
+#   - scan jobs run permissions: contents: read with no secrets in scope —
+#     a compromised scanner step can't exfiltrate what the job can't see
+#   - harden-runner audits egress on every job as a detection layer; pinning
+#     stops a swapped tag, not a compromise already sitting at the pinned SHA
+#
+# Called from an individual repo with:
+#   jobs:
+#     ci:
+#       uses: <org>/regional-health-platform/.github/workflows/golden-ci.yml@<sha>
+#       with:
+#         app_dir: api
+#         image_name: regional-health-api
+#         run_apply: true            # only needed once you're ready to apply
+#         aiven_host: <your Aiven MySQL host>
+#         aiven_port: <your Aiven MySQL port>
+#       secrets:
+#         localstack_auth_token: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+#         aiven_password: ${{ secrets.AIVEN_PASSWORD }}
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        description: "Path to the application directory (contains the Dockerfile)"
+        type: string
+        required: true
+      image_name:
+        description: "Image name used for the AMI tag (localstack-ec2/<image_name>:ami-<sha12>) — no registry/ECR, the image is built and scanned in-pipeline and used directly"
+        type: string
+        required: true
+      terraform_dir:
+        description: "Path to the caller's Terraform root that composes modules/data + modules/service"
+        type: string
+        default: "terraform"
+      run_apply:
+        description: "Whether to run tflocal apply (set false for PR-only gate runs; true on main)"
+        type: boolean
+        default: false
+      # Aiven MySQL replaced RDS (RDS isn't on LocalStack's free tier) — see
+      # the #announcements switch. host/port aren't secret-shaped (same as
+      # modules/data's own non-secret variables), so they're plain inputs;
+      # only the password is a secret. Names match modules/data's proposed
+      # variables (Rigbe) — provisional until that module's Aiven update
+      # actually merges; update here if the real variable names differ.
+      aiven_host:
+        description: "Aiven MySQL service hostname — only needed by the apply job"
+        type: string
+        required: false
+      aiven_port:
+        description: "Aiven MySQL service port — only needed by the apply job"
+        type: number
+        required: false
+    secrets:
+      localstack_auth_token:
+        description: "LOCALSTACK_AUTH_TOKEN — only needed by the apply job, never by the scan jobs"
+        required: false
+      aiven_password:
+        description: "Aiven MySQL admin (avnadmin) password — only needed by the apply job"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate 1 — gitleaks: secrets in the repo + full git history.
+  # ---------------------------------------------------------------------------
+  gitleaks:
+    name: "gate: gitleaks"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout (full history — gitleaks scans all of it)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          # gitleaks-action v3 requires GITHUB_TOKEN explicitly for PR-event
+          # scans (breaking change on their end) -- this is the automatic
+          # per-run token every job already has, not a new secrets: input.
+          # Caught by Rigbe and Nebyat testing this workflow against their
+          # own repos' first real PRs.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
+
+  # ---------------------------------------------------------------------------
+  # Gate 2 — trivy config: Terraform + Dockerfile misconfiguration.
+  # Fails the build on CRITICAL/HIGH. Runs only after gitleaks passes.
+  # ---------------------------------------------------------------------------
+  trivy-config:
+    name: "gate: trivy config"
+    needs: gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run trivy config scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: "config"
+          scan-ref: "."
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          format: "json"
+          output: "trivy-config.json"
+
+      - name: Upload trivy config report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-config
+          path: trivy-config.json
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Gate 3 — zizmor: this repo's own GitHub Actions workflows.
+  # ---------------------------------------------------------------------------
+  zizmor:
+    name: "gate: zizmor"
+    needs: trivy-config
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Run zizmor (CLI directly, not the wrapper action)
+        # zizmor-action's default (advanced-security: true) never fails the
+        # build — it only uploads findings to GHAS, which isn't guaranteed
+        # enabled on every member's repo. advanced-security: false has the
+        # same non-blocking behavior. Running the CLI directly is the only
+        # way to get a real exit code: 0 = clean, 11-14 = a finding at or
+        # above severity, which is what actually fails this job (per C5,
+        # "a scanner that runs but never blocks is theatre").
+        run: |
+          set -euo pipefail
+          pip install "zizmor==1.29.0"
+          zizmor --persona=pedantic --min-severity=medium .
+
+  # ---------------------------------------------------------------------------
+  # Gate 4 — docker build. Only runs once all three static gates are green.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    name: "docker build"
+    needs: [gitleaks, trivy-config, zizmor]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image_ref: ${{ steps.build.outputs.image_ref }}
+      ami_tag: ${{ steps.ami.outputs.tag }}
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build image (local, not pushed yet — trivy image scans it first)
+        id: build
+        run: |
+          set -euo pipefail
+          IMAGE="${{ inputs.image_name }}:${{ github.sha }}"
+          docker build --tag "$IMAGE" "${{ inputs.app_dir }}"
+          echo "image_ref=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Compute AMI tag (localstack-ec2/<name>:ami-<sha12>)
+        id: ami
+        run: |
+          set -euo pipefail
+          SHA12="${GITHUB_SHA:0:12}"
+          TAG="localstack-ec2/${{ inputs.image_name }}:ami-${SHA12}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Save image for the next job (no registry push — same runner)
+        run: docker save "${{ steps.build.outputs.image_ref }}" -o /tmp/image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docker-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Gate 5 — trivy image: the built image itself. Fails on HIGH/CRITICAL.
+  # ---------------------------------------------------------------------------
+  trivy-image:
+    name: "gate: trivy image"
+    needs: docker-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Download image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Load image
+        run: docker load -i /tmp/image.tar
+
+      - name: Run trivy image scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: "${{ needs.docker-build.outputs.image_ref }}"
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          format: "json"
+          output: "trivy-image.json"
+
+      - name: Upload trivy image report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-image
+          path: trivy-image.json
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # tflocal apply — only on the caller's chosen ref (e.g. push to main), never
+  # on every PR from a fork. LocalStack runs in-runner per the assignment's
+  # CI model; no hosted Cloud Sandbox / Cloud Pods.
+  # ---------------------------------------------------------------------------
+  tflocal-apply:
+    name: "tflocal apply"
+    # needs both: trivy-image is the last gate before apply, and this job
+    # reads needs.docker-build.outputs.ami_tag directly (job output access
+    # requires an explicit needs: entry — it's not transitive through
+    # trivy-image even though trivy-image itself needs: docker-build).
+    needs: [docker-build, trivy-image]
+    if: inputs.run_apply
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install OpenTofu
+        # tflocal defaults to invoking `terraform` unless TF_CMD is set —
+        # checked LocalStack's own docs directly. The group platform's
+        # convention is tofu (README.md: "OpenTofu (tofu), Terraform >=
+        # 1.10"), so TF_CMD=tofu is set on every subsequent tflocal step
+        # below, and this installs the tofu binary itself (not Terraform).
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh -o install-opentofu.sh
+          chmod +x install-opentofu.sh
+          sudo ./install-opentofu.sh --install-method deb
+          rm -f install-opentofu.sh
+
+      - name: Start LocalStack (in-runner mode)
+        env:
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
+        run: |
+          pip install localstack terraform-local awscli-local[ver1]
+          docker pull localstack/localstack-pro:latest
+          DISABLE_EVENTS=1 localstack start -d
+          localstack wait -t 60
+
+      - name: Prep evidence directory
+        run: mkdir -p evidence/01-iac
+
+      - name: tflocal apply
+        working-directory: ${{ inputs.terraform_dir }}
+        env:
+          TF_CMD: tofu
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
+          TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
+          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
+          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
+        run: |
+          set -euo pipefail
+          tflocal init -input=false
+          tflocal apply -auto-approve -input=false 2>&1 | tee "$GITHUB_WORKSPACE/evidence/01-iac/apply.log"
+
+      - name: Verify plan is empty after apply (C1 — must be empty)
+        working-directory: ${{ inputs.terraform_dir }}
+        env:
+          TF_CMD: tofu
+          TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
+          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
+          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
+        run: |
+          set -euo pipefail
+          # -detailed-exitcode: 0 = no changes (what C1 requires), 1 = error,
+          # 2 = changes present (fails this step on purpose — a non-empty
+          # plan after apply means the module isn't actually reproducible).
+          # Needs the same TF_VARs as apply — tofu plan re-evaluates the
+          # whole config, not just diffs against the prior apply's inputs.
+          tflocal plan -input=false -detailed-exitcode 2>&1 | tee "$GITHUB_WORKSPACE/evidence/01-iac/plan-after-apply.txt"
+
+      - name: tflocal destroy (prove teardown, then evidence upload keeps the logs)
+        if: always()
+        working-directory: ${{ inputs.terraform_dir }}
+        env:
+          TF_CMD: tofu
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.localstack_auth_token }}
+          TF_VAR_app_ami_id: "${{ needs.docker-build.outputs.ami_tag }}"
+          TF_VAR_aiven_host: "${{ inputs.aiven_host }}"
+          TF_VAR_aiven_port: "${{ inputs.aiven_port }}"
+          TF_VAR_aiven_password: "${{ secrets.aiven_password }}"
+        run: |
+          set -euo pipefail
+          tflocal destroy -auto-approve -input=false 2>&1 | tee "$GITHUB_WORKSPACE/evidence/01-iac/destroy.log"
+
+      - name: Upload C1 IaC evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: iac-evidence
+          path: evidence/01-iac/
+          retention-days: 14
