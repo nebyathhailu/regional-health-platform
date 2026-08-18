@@ -5,6 +5,18 @@ individual repo calls this by pinned SHA instead of writing its own gate
 logic — one pipeline definition, one place to fix a gate, every rehost gets
 the fix identically.
 
+## Why a PR that only touches this file shows no CI checks
+
+`golden-ci.yml` is `workflow_call`-only — it has no trigger of its own, so it
+never runs against its own PRs, only when a caller repo invokes it. That's
+intentional, not a gap: `lint-workflows.yml` (a separate, small workflow in
+this same directory) runs `actionlint` against every workflow file on any PR
+touching `.github/workflows/**`, catching structural mistakes — a bad action
+reference, invalid expression syntax, malformed YAML — before merge, without
+needing a real app or a `LOCALSTACK_AUTH_TOKEN` in this repo. It is
+deliberately not a full exercise of the gates themselves; that only happens
+when a caller repo (an individual rehost) actually invokes `golden-ci.yml`.
+
 ## What it does
 
 Gate order is frozen by

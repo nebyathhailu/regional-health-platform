@@ -1,0 +1,52 @@
+name: lint-workflows
+
+# =============================================================================
+# golden-ci.yml is workflow_call-only (see its own header) — it has no trigger
+# of its own, so a PR that only touches it gets zero CI signal by default.
+# This is a separate, thin check: lints every workflow file in this repo on
+# every PR that touches .github/workflows/, so a structural mistake (bad
+# action reference, invalid expression, malformed YAML) is caught before
+# merge instead of silently sitting until some caller repo trips over it.
+#
+# Deliberately NOT a full exercise of golden-ci.yml's gates — this repo has no
+# app/Dockerfile of its own to build or scan (that's what "the group platform
+# holds the definition; individual repos hold the app" means), and running
+# tflocal-apply here would need a LOCALSTACK_AUTH_TOKEN this repo has no
+# reason to hold. Full end-to-end proof happens when a caller repo invokes
+# golden-ci.yml for real.
+# =============================================================================
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: "lint: actionlint"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download actionlint (pinned release, checksum-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          chmod +x actionlint
+
+      - name: Run actionlint against every workflow file
+        run: ./actionlint -color
