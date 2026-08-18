@@ -74,6 +74,12 @@ jobs:
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
+          # gitleaks-action v3 requires GITHUB_TOKEN explicitly for PR-event
+          # scans (breaking change on their end) -- this is the automatic
+          # per-run token every job already has, not a new secrets: input.
+          # Caught by Rigbe and Nebyat testing this workflow against their
+          # own repos' first real PRs.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
 
   # ---------------------------------------------------------------------------
