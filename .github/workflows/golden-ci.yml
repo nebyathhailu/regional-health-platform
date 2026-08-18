@@ -247,7 +247,11 @@ jobs:
   # ---------------------------------------------------------------------------
   tflocal-apply:
     name: "tflocal apply"
-    needs: trivy-image
+    # needs both: trivy-image is the last gate before apply, and this job
+    # reads needs.docker-build.outputs.ami_tag directly (job output access
+    # requires an explicit needs: entry — it's not transitive through
+    # trivy-image even though trivy-image itself needs: docker-build).
+    needs: [docker-build, trivy-image]
     if: inputs.run_apply
     runs-on: ubuntu-latest
     permissions:
