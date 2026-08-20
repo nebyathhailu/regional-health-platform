@@ -25,6 +25,15 @@ locals {
   # Scope ingress to the VPC CIDR unless the caller overrides. Never 0.0.0.0/0.
   ingress_cidrs = var.ingress_cidrs != null ? var.ingress_cidrs : [data.aws_vpc.default.cidr_block]
 
+  # CI tags the Docker-backed EC2 AMI as `localstack-ec2/<name>:ami-<hex>`
+  # (see variables.tf's validation, which accepts either that form or a bare
+  # id). AWS's DescribeImages only accepts the bare `ami-<hex>` id -- passing
+  # the full tag straight through fails with InvalidAMIID.Malformed
+  # (confirmed in CI: "localstack-ec2/capacity-api:ami-cb5f14a15bcf" rejected,
+  # "expecting ami-..."). Strip everything through the last colon; a value
+  # that's already a bare ami-id (no colon) passes through unchanged.
+  app_ami_id = element(split(":", var.app_ami_id), length(split(":", var.app_ami_id)) - 1)
+
   user_data = templatefile("${path.module}/templates/user-data.sh.tftpl", {
     nginx_conf        = local.nginx_conf
     app_port          = var.app_port
@@ -109,7 +118,7 @@ resource "aws_security_group" "app" {
 
 # --- EC2 instance -------------------------------------------------------------
 resource "aws_instance" "app" {
-  ami                    = var.app_ami_id
+  ami                    = local.app_ami_id
   instance_type          = var.instance_type
   subnet_id              = data.aws_subnets.default.ids[0]
   vpc_security_group_ids = [aws_security_group.app.id]
