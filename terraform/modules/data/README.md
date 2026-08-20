@@ -84,16 +84,22 @@ credential in git, image, or logged output.
 
 **TLS / CA certificate**: Aiven requires TLS and gives you a CA cert to
 verify it. That cert is *not* secret (it's a public root cert), so it
-deliberately doesn't go through this module or Secrets Manager. How
-`modules/service`'s boot process gets it to the app — baked into the AMI,
-fetched from Aiven's public URL, or passed as a plain non-sensitive variable
-— is an app-boot decision to coordinate with whoever owns `modules/service`,
-not something this module decides unilaterally.
+deliberately doesn't go through this module or Secrets Manager. **Resolved:**
+`modules/service` now takes it as a plain non-sensitive variable
+(`db_ca_cert`) and writes it to `/etc/app/db-ca.pem` on the instance,
+exporting `DB_CA_CERT_PATH` for the app to pick up — see that module's
+README. This module still deliberately has no opinion on the cert; it's
+entirely `modules/service`'s concern, as designed.
 
 ## Testing
 
 - `tofu fmt` + `tofu validate` clean.
-- **Not yet runtime-verified** — needs a real Aiven service + a LocalStack
-  apply to confirm the secret envelope round-trips through a real
-  `GetSecretValue` call from the app, and that the app can actually establish
-  a TLS connection to Aiven from inside a LocalStack-emulated EC2 instance.
+- The TLS handshake itself is confirmed working end-to-end against a real
+  Aiven service (`mysql --ssl-ca=<the same cert> --ssl-verify-server-cert`
+  reaches MySQL's own auth stage, i.e. TLS negotiation succeeds) — but the
+  full app-boot path (EC2 instance → app → `GetSecretValue` → TLS to Aiven,
+  all inside a LocalStack-emulated instance) is **still blocked** by the
+  separately-documented LocalStack EC2 limitations in the rehosted service
+  repos' `evidence/01-iac/README.md` (Docker-backed AMI discovery, ELBv2
+  license) — not something this module or the `db_ca_cert` fix can resolve
+  on its own.

@@ -28,6 +28,7 @@ teammate reuses it and supplies their own image, port, and start command.
 | `secret_arn` | — | Secrets Manager ARN (from `modules/data`) — **value never passed** |
 | `db_endpoint` | — | DB host (host only), bridge-reachable e.g. `localhost.localstack.cloud` (break #1) |
 | `db_port` | `3306` | |
+| `db_ca_cert` | `""` | PEM CA cert for TLS to the DB (e.g. Aiven's project CA). Public, not secret — written to `/etc/app/db-ca.pem` and exported as `DB_CA_CERT_PATH` when set; skipped entirely when `""` |
 | `aws_endpoint_url` | `http://localhost.localstack.cloud:4566` | SDK target. Set to `""` for real AWS: user-data then exports no endpoint override and no static creds, so the SDK uses the instance-profile role (same image, either environment) |
 | `aws_region` | `us-east-1` | |
 | `ingress_cidrs` | default VPC CIDR | **Never `0.0.0.0/0`** — that's the trivy red-PR |

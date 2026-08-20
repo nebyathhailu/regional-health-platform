@@ -43,6 +43,7 @@ locals {
     secret_arn        = var.secret_arn
     db_endpoint       = var.db_endpoint
     db_port           = var.db_port
+    db_ca_cert        = var.db_ca_cert
     aws_endpoint_url  = var.aws_endpoint_url
     aws_region        = var.aws_region
   })

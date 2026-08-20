@@ -42,6 +42,20 @@ export AWS_SECRET_ACCESS_KEY="test"
 export DB_SECRET_ARN="${secret_arn}"
 export DB_HOST="${db_endpoint}"
 export DB_PORT="${db_port}"
+%{ if db_ca_cert != "" ~}
+# Aiven (and most managed MySQL) requires TLS. This is the CA's public root
+# cert -- not secret, unlike the credential envelope above -- so it's safe to
+# write to disk here rather than route through Secrets Manager. The app reads
+# DB_CA_CERT_PATH to verify the server's cert (see api/secrets.js in a
+# rehosted service repo); unset (this block skipped) means the app connects
+# without TLS verification configured, same as before this variable existed.
+mkdir -p /etc/app
+cat > /etc/app/db-ca.pem <<'DBCACERT'
+${db_ca_cert}
+DBCACERT
+chmod 644 /etc/app/db-ca.pem
+export DB_CA_CERT_PATH=/etc/app/db-ca.pem
+%{ endif ~}
 %{ for k, v in app_env ~}
 export ${k}="${v}"
 %{ endfor ~}
