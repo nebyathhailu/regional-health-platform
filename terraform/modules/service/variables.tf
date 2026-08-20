@@ -105,6 +105,23 @@ variable "db_port" {
   default     = 3306
 }
 
+variable "db_ca_cert" {
+  description = <<-EOT
+    PEM-encoded CA certificate for verifying the DB's TLS connection (e.g.
+    Aiven's project CA). This is a public root cert, NOT secret -- unlike
+    secret_arn's envelope, it's fine to pass as a plain variable and it
+    deliberately does not go through modules/data or Secrets Manager (see
+    that module's README). When set, user-data writes it to
+    /etc/app/db-ca.pem on the instance and exports DB_CA_CERT_PATH, which
+    the app resolves for TLS verification (see api/secrets.js in a rehosted
+    service repo). Left empty ("") for a DB that doesn't require TLS --
+    user-data then skips the file and the env var entirely, matching the
+    module's original behavior.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "aws_endpoint_url" {
   description = <<-EOT
     Endpoint the app's AWS SDK targets. Points at LocalStack from inside the
