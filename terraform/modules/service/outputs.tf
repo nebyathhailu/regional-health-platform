@@ -14,6 +14,6 @@ output "app_security_group_id" {
 }
 
 output "alb_dns_name" {
-  description = "ALB DNS name (declared as IaC; nginx carries the real traffic)."
-  value       = aws_lb.app.dns_name
+  description = "ALB DNS name (declared as IaC; nginx carries the real traffic). Empty when create_alb is false."
+  value       = var.create_alb ? aws_lb.app[0].dns_name : ""
 }
