@@ -152,6 +152,8 @@ resource "aws_instance" "app" {
 # internet-facing, so AWS-0053 is suppressed by design (not a defect).
 #trivy:ignore:AVD-AWS-0053 internet-facing is the intended design for a public entrypoint
 resource "aws_lb" "app" {
+  count = var.create_alb ? 1 : 0
+
   name                       = "${var.name_prefix}-alb"
   internal                   = false
   load_balancer_type         = "application"
@@ -163,6 +165,8 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "app" {
+  count = var.create_alb ? 1 : 0
+
   name = "${var.name_prefix}-tg"
   # Target nginx (80), not the app port directly, so the declared LB path also
   # goes through the readiness gate — consistent with the SG (no app-port ingress).
@@ -189,13 +193,15 @@ resource "aws_lb_target_group" "app" {
 # that justification; noted in evidence/05-gates/README.md.
 #trivy:ignore:AVD-AWS-0054 ALB is non-routing IaC only; no TLS material in lab; nginx terminates real traffic
 resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.app.arn
+  count = var.create_alb ? 1 : 0
+
+  load_balancer_arn = aws_lb.app[0].arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    target_group_arn = aws_lb_target_group.app[0].arn
   }
 
   lifecycle {

@@ -149,3 +149,16 @@ variable "ingress_cidrs" {
   type        = list(string)
   default     = null
 }
+
+variable "create_alb" {
+  description = <<-EOT
+    Whether to actually create the aws_lb/target_group/listener resources.
+    The elbv2 service is not included in LocalStack's freemium license
+    ("available in an upgraded license" per the apply-time error), so this
+    defaults to false there — the ALB resources stay declared (and scanned
+    by trivy/zizmor as real IaC) but are not created. Set true against real
+    AWS, where the ALB is a real deployable resource.
+  EOT
+  type        = bool
+  default     = false
+}
