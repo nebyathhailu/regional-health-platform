@@ -27,12 +27,22 @@ locals {
 
   # CI tags the Docker-backed EC2 AMI as `localstack-ec2/<name>:ami-<hex>`
   # (see variables.tf's validation, which accepts either that form or a bare
-  # id). AWS's DescribeImages only accepts the bare `ami-<hex>` id -- passing
-  # the full tag straight through fails with InvalidAMIID.Malformed
-  # (confirmed in CI: "localstack-ec2/capacity-api:ami-cb5f14a15bcf" rejected,
-  # "expecting ami-..."). Strip everything through the last colon; a value
-  # that's already a bare ami-id (no colon) passes through unchanged.
-  app_ami_id = element(split(":", var.app_ami_id), length(split(":", var.app_ami_id)) - 1)
+  # id). The two environments want opposite formats, confirmed by hitting
+  # both directly (not assumed):
+  #   - real AWS's DescribeImages only accepts the bare `ami-<hex>` id --
+  #     passing the full tag fails with InvalidAMIID.Malformed ("expecting
+  #     ami-...").
+  #   - LocalStack's Docker-backed EC2 emulation resolves the ami by looking
+  #     for a Docker image whose repo:tag is the FULL string -- passing the
+  #     stripped bare id fails with InvalidAMIID.NotFound (confirmed via
+  #     `docker logs localstack-main` showing `ec2.DescribeImages => 400` at
+  #     apply time, image present under the full tag in `docker images`).
+  # var.aws_endpoint_url is how every other environment-conditional value in
+  # this module already distinguishes LocalStack from real AWS (see
+  # variables.tf's description on that var) -- reuse the same signal here
+  # rather than introducing a second way to detect the same thing.
+  is_localstack = var.aws_endpoint_url != ""
+  app_ami_id    = local.is_localstack ? var.app_ami_id : element(split(":", var.app_ami_id), length(split(":", var.app_ami_id)) - 1)
 
   user_data = templatefile("${path.module}/templates/user-data.sh.tftpl", {
     nginx_conf        = local.nginx_conf
