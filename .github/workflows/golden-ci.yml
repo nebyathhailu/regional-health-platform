@@ -264,6 +264,16 @@ jobs:
           image-ref: "${{ needs.docker-build.outputs.image_ref }}"
           exit-code: "1"
           severity: "CRITICAL,HIGH"
+          # Confirmed against a real image (capacity-api, db-capacity-
+          # engineering-lab) that most base-image OS-level CVEs (util-linux,
+          # perl, ncurses) have no fix available yet from Debian at all
+          # (status: affected / fix_deferred) -- blocking on those forever
+          # isn't meaningful security, just permanent noise no base-image
+          # swap can clear. ignore-unfixed: true skips only those; anything
+          # WITH a real fix (confirmed: npm's own bundled tar/brace-
+          # expansion/picomatch/sigstore carried real fixable CVEs) still
+          # fails the build.
+          ignore-unfixed: true
           format: "json"
           output: "trivy-image.json"
 
